@@ -154,9 +154,9 @@ env:
   SWEBENCH_MAX_WORKERS: '8'
   # [TEMP SMOKE-ONLY] 7/10 agents hit the 30-step default before submitting
   SWEBENCH_AGENT_STEP_LIMIT: '75'
-  # [TEMP SMOKE-ONLY] full-300 run: 64 parallel agents (~5 waves); at the
-  # default 8 the generation phase alone is ~3h.
-  SWEBENCH_AGENT_WORKERS: '64'
+  # [TEMP SMOKE-ONLY] full-300 run: match the recipe's conc point (144) so
+  # the eval drives the server at the batching regime it was tuned for.
+  SWEBENCH_AGENT_WORKERS: '144'
   # [TEMP SMOKE-ONLY] first full-300 scoring builds ~250 eval images that
   # aren't in the workspace cache yet; 2h default would trip mid-build.
   # Images cache afterward -- drop this once the first full run completes.
