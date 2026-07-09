@@ -4639,6 +4639,6 @@
     - kimik2.7-fp4-mi355x-vllm-agentic
   description:
     - "Add Kimi-K2.7-Code-MXFP4 agentic-coding config on MI355X (cluster:gbt350docker->mi355x-amds) via vLLM v0.24.0, TP4"
-    - "Sweep KV-offloading none vs dram/LMCache at conc [1,4,8,16,32,48]; LMCache MP server + LMCacheMPConnector, dram-utilization 0.80"
+    - "Sweep KV-offloading none vs dram/LMCache at conc [1,4,8,16,32,42]; LMCache MP server + LMCacheMPConnector, dram-utilization 0.80"
     - "Recipe benchmarks/single_node/agentic/kimik2.7_fp4_mi355x.sh clones LMCache to container-local /opt/lmcache-src (pinned) so CI checkout never trips over root-owned build artifacts"
   pr-link: https://github.com/SemiAnalysisAI/InferenceX/pull/PLACEHOLDER
