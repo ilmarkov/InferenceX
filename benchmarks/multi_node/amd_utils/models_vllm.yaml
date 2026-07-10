@@ -33,12 +33,12 @@ Kimi-K2.5-MXFP4:
   # baseline. The non-disagg recipe runs Kimi on MI355X with these on, so keep
   # them on here.
   #
-  # Prefill runs expert-parallel with the mori all2all backend (matches decode):
+  # Prefill runs expert-parallel with the MoRI all2all backend (matches decode):
   # the 1T MoE prefill was the 1P2D pipeline bottleneck under EP1-dense, starving
   # the EP8 decode nodes. cudagraph_mode is PIECEWISE (vs the non-disagg full
   # graph) because the KV connector inserts ops that can break full-graph capture.
-  prefill_flags: "--tensor-parallel-size 8 --enable-expert-parallel --all2all-backend mori --compilation-config '{\"cudagraph_mode\":\"PIECEWISE\"}' --no-enable-prefix-caching --kv-cache-dtype fp8 --block-size 1 --gpu-memory-utilization 0.90 --mm-encoder-tp-mode data"
-  decode_flags: "--tensor-parallel-size 8 --enable-expert-parallel --all2all-backend mori --compilation-config '{\"cudagraph_mode\":\"PIECEWISE\"}' --no-enable-prefix-caching --kv-cache-dtype fp8 --block-size 1 --gpu-memory-utilization 0.90 --mm-encoder-tp-mode data"
+  prefill_flags: "--tensor-parallel-size 8 --enable-expert-parallel --all2all-backend mori_high_throughput --compilation-config '{\"cudagraph_mode\":\"PIECEWISE\"}' --no-enable-prefix-caching --kv-cache-dtype fp8 --block-size 1 --gpu-memory-utilization 0.90 --mm-encoder-tp-mode data"
+  decode_flags: "--tensor-parallel-size 8 --enable-expert-parallel --all2all-backend mori_high_throughput --compilation-config '{\"cudagraph_mode\":\"PIECEWISE\"}' --no-enable-prefix-caching --kv-cache-dtype fp8 --block-size 1 --gpu-memory-utilization 0.90 --mm-encoder-tp-mode data"
   # MoRI all2all (EP) is incompatible with the AITER fused shared-expert kernel
   # (ROCm vLLM-MoRI guidance): with it enabled the EP dispatch can silently drop
   # shared-expert contributions or fault. Force it off whenever --all2all-backend
