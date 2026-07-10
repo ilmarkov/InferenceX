@@ -150,22 +150,12 @@ env:
   # SWE-bench scoring runs on Modal (GPU runners have no Docker); creds are
   # bootstrapped into ~/.modal.toml by benchmark_lib.sh:_ensure_modal_credentials.
   SWEBENCH_USE_MODAL: 'true'
-  # [TEMP SMOKE-ONLY] parallel Modal sandboxes for the overnight baseline
-  SWEBENCH_MAX_WORKERS: '8'
-  # [TEMP SMOKE-ONLY] 7/10 agents hit the 30-step default before submitting
-  SWEBENCH_AGENT_STEP_LIMIT: '75'
-  # [TEMP SMOKE-ONLY] full-300 run: match the recipe's conc point (144) so
-  # the eval drives the server at the batching regime it was tuned for.
-  SWEBENCH_AGENT_WORKERS: '144'
-  # [TEMP SMOKE-ONLY] first full-300 scoring builds ~250 eval images that
-  # aren't in the workspace cache yet; 2h default would trip mid-build.
-  # Images cache afterward -- drop this once the first full run completes.
-  SWEBENCH_SCORE_TIMEOUT: '14400'
   MODAL_TOKEN_ID: ${{ secrets.MODAL_TOKEN_ID }}
   MODAL_TOKEN_SECRET: ${{ secrets.MODAL_TOKEN_SECRET }}
-  # [TEMP SMOKE-ONLY] b300-005 is a black-hole node (NCCL/CUDA init death,
-  # jobs 30508/30548); b300-006 has a wedged nvidia driver (container-cli rpc
-  # timeout, run 28958779201). salloc honors this env natively. Drop before merge.
+  # Known-bad b300 nodes, excluded until infra repairs them (salloc honors
+  # this env natively). b300-005: NCCL/CUDA init death (jobs 30508/30548).
+  # b300-006: wedged nvidia driver, container-cli rpc timeout (run
+  # 28958779201). Remove entries as nodes are fixed.
   SALLOC_EXCLUDE: 'b300-005,b300-006'
 
 permissions:
