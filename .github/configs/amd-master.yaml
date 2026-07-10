@@ -1313,9 +1313,8 @@ dsr1-fp8-mi355x-sglang-disagg-mtp:
           - "DECODE_MTP_SIZE=2"
 
 kimik2.5-fp4-mi355x-vllm-disagg:
-  # nightly-bf610c2f was never published under the vllm/ org (manifest-not-found
-  # on pull); the identical build is mirrored under aigmkt/.
-  image: aigmkt/vllm-openai-rocm:nightly-bf610c2f56764e1b30bc6065f4ceace3d6e59036
+  # Use the latest ROCm vLLM nightly while validating DP-attention + MoRIIO.
+  image: vllm/vllm-openai-rocm:nightly
   model: amd/Kimi-K2.5-MXFP4
   model-prefix: kimik2.5
   runner: mi355x-disagg
