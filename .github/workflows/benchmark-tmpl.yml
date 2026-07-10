@@ -157,6 +157,8 @@ env:
   # b300-006: wedged nvidia driver, container-cli rpc timeout (run
   # 28958779201). Remove entries as nodes are fixed.
   SALLOC_EXCLUDE: 'b300-005,b300-006'
+  # [TEMP SMOKE-ONLY pareto sweep point] agent sandbox cpu
+  SWEBENCH_AGENT_SANDBOX_CPU: '1'
 
 permissions:
   contents: read
