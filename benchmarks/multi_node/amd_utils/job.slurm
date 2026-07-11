@@ -403,6 +403,15 @@ if [[ "$ENGINE" == "vllm-disagg" ]]; then
         -e MORI_GPU_ARCHS=\${MORI_GPU_ARCHS:-gfx950}
         -e PROXY_STREAM_IDLE_TIMEOUT=\${PROXY_STREAM_IDLE_TIMEOUT:-300}
         -e VLLM_MORIIO_CONNECTOR_READ_MODE=\${VLLM_MORIIO_CONNECTOR_READ_MODE:-1}
+        -e VLLM_MORIIO_HANDSHAKE_PORT=\${VLLM_MORIIO_HANDSHAKE_PORT:-6301}
+        -e VLLM_MORIIO_NOTIFY_PORT=\${VLLM_MORIIO_NOTIFY_PORT:-61005}
+        -e VLLM_MORIIO_TRANSFER_TIMEOUT=\${VLLM_MORIIO_TRANSFER_TIMEOUT:-120}
+        -e VLLM_MORIIO_DEFER_TIMEOUT=\${VLLM_MORIIO_DEFER_TIMEOUT:-120}
+        -e VLLM_MORIIO_QP_PER_TRANSFER=\${VLLM_MORIIO_QP_PER_TRANSFER:-4}
+        -e VLLM_MORIIO_POST_BATCH_SIZE=\${VLLM_MORIIO_POST_BATCH_SIZE:--1}
+        -e VLLM_MORIIO_NUM_WORKERS=\${VLLM_MORIIO_NUM_WORKERS:-4}
+        -e VLLM_MORIIO_BACKEND=\${VLLM_MORIIO_BACKEND:-}
+        -e VLLM_MORIIO_HOST_IP=\${VLLM_MORIIO_HOST_IP:-}
         -e PYTHONPYCACHEPREFIX=/tmp/pycache
     )
 elif [[ "$ENGINE" == "atom-disagg" ]]; then
@@ -538,6 +547,7 @@ if [[ \"$ENGINE\" == \"vllm-disagg\" && \"$ROUTER_TYPE\" == \"vllm-router\" && \
             --vllm-discovery-address 0.0.0.0:${PROXY_PING_PORT} \
             --port ${ROUTER_PORT} \
             --host 0.0.0.0 \
+            --prometheus-port ${ROUTER_PROMETHEUS_PORT:-$((ROUTER_PORT + 7000))} \
             --policy consistent_hash \
             --prefill-policy consistent_hash \
             --decode-policy consistent_hash \

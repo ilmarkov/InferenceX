@@ -235,10 +235,77 @@ echo "Decode  node IPs: ${DECODE_ARGS}"
 # MoRI-IO proxy ZMQ registration port (must match vllm-router --vllm-discovery-address)
 PROXY_PING_PORT="${PROXY_PING_PORT:-36367}"
 
+# vLLM nightly no longer honors the legacy VLLM_MORIIO_* environment variables
+# directly; pass MoRIIO runtime knobs through kv_connector_extra_config.
+make_moriio_kv_transfer_config() {
+    local kv_role="$1"
+    MORIIO_KV_ROLE="$kv_role" python3 - <<'PY'
+import json
+import os
+
+
+def _bool_env(name: str, default: str = "1") -> bool:
+    return str(os.environ.get(name, default)).strip().lower() in (
+        "1",
+        "true",
+        "yes",
+        "on",
+    )
+
+
+def _int_env(name: str, default: int) -> int:
+    value = os.environ.get(name)
+    return default if value in (None, "") else int(value)
+
+
+def _float_env(name: str, default: float) -> float:
+    value = os.environ.get(name)
+    return default if value in (None, "") else float(value)
+
+
+extra_config = {
+    "proxy_ip": os.environ["NODE0_ADDR"],
+    "proxy_ping_port": str(os.environ.get("PROXY_PING_PORT", "36367")),
+    "http_port": str(os.environ.get("SERVER_PORT", "2584")),
+    "handshake_port": _int_env("VLLM_MORIIO_HANDSHAKE_PORT", 6301),
+    "notify_port": _int_env("VLLM_MORIIO_NOTIFY_PORT", 61005),
+    "read_mode": _bool_env("VLLM_MORIIO_CONNECTOR_READ_MODE", "1"),
+    "transfer_timeout": _float_env("VLLM_MORIIO_TRANSFER_TIMEOUT", 120.0),
+    "defer_timeout": _float_env("VLLM_MORIIO_DEFER_TIMEOUT", 120.0),
+    "qp_per_transfer": _int_env("VLLM_MORIIO_QP_PER_TRANSFER", 4),
+    "post_batch_size": _int_env("VLLM_MORIIO_POST_BATCH_SIZE", -1),
+    "num_workers": _int_env("VLLM_MORIIO_NUM_WORKERS", 4),
+}
+
+backend = os.environ.get("VLLM_MORIIO_BACKEND")
+if backend:
+    extra_config["backend"] = backend
+
+host_ip = os.environ.get("VLLM_MORIIO_HOST_IP")
+if host_ip:
+    extra_config["host_ip"] = host_ip
+
+print(
+    json.dumps(
+        {
+            "kv_connector": "MoRIIOConnector",
+            "kv_role": os.environ["MORIIO_KV_ROLE"],
+            "kv_connector_extra_config": extra_config,
+        },
+        separators=(",", ":"),
+    )
+)
+PY
+}
+
 # vLLM runtime environment (static vars moved to env.sh; these depend on per-node state)
 setup_vllm_env() {
     export VLLM_NIXL_SIDE_CHANNEL_HOST=${rdma_ip}
     export VLLM_NIXL_SIDE_CHANNEL_PORT=5600
+    # MoRIIO uses this address for service discovery and RDMA handshakes.
+    # Prefer the routable RDMA IP; the management IP can register successfully
+    # but later fail or hang during cross-node KV transfer.
+    export VLLM_MORIIO_HOST_IP="${VLLM_MORIIO_HOST_IP:-${rdma_ip}}"
     for env_pair in ${MODEL_ENVS}; do
         export "$env_pair"
     done
@@ -270,11 +337,13 @@ if [ "$NODE_RANK" -eq 0 ]; then
     echo "Using external vllm-router container (started by job.slurm on this node)"
 
     SERVED_MODEL="${MODEL_NAME}"
+    PREFILL_KV_TRANSFER_CONFIG="$(make_moriio_kv_transfer_config kv_producer)"
+    echo "PREFILL_KV_TRANSFER_CONFIG: $PREFILL_KV_TRANSFER_CONFIG"
     PREFILL_CMD="vllm serve ${MODEL_PATH} \
         --served-model-name ${SERVED_MODEL} \
         --port $SERVER_PORT \
         --trust-remote-code \
-        --kv-transfer-config '{\"kv_connector\": \"MoRIIOConnector\", \"kv_role\": \"kv_producer\", \"kv_connector_extra_config\": {\"proxy_ip\": \"${NODE0_ADDR}\", \"proxy_ping_port\": \"${PROXY_PING_PORT}\", \"http_port\": \"${SERVER_PORT}\"}}' \
+        --kv-transfer-config '${PREFILL_KV_TRANSFER_CONFIG}' \
         ${PREFILL_SERVER_CONFIG}"
 
     if [[ "$DRY_RUN" -eq 1 ]]; then
@@ -488,11 +557,13 @@ elif [ "$NODE_RANK" -gt 0 ] && [ "$NODE_RANK" -lt "$xP" ]; then
     setup_vllm_env
 
     SERVED_MODEL="${MODEL_NAME}"
+    PREFILL_KV_TRANSFER_CONFIG="$(make_moriio_kv_transfer_config kv_producer)"
+    echo "PREFILL_KV_TRANSFER_CONFIG: $PREFILL_KV_TRANSFER_CONFIG"
     PREFILL_CMD="vllm serve ${MODEL_PATH} \
         --served-model-name ${SERVED_MODEL} \
         --port $SERVER_PORT \
         --trust-remote-code \
-        --kv-transfer-config '{\"kv_connector\": \"MoRIIOConnector\", \"kv_role\": \"kv_producer\", \"kv_connector_extra_config\": {\"proxy_ip\": \"${NODE0_ADDR}\", \"proxy_ping_port\": \"${PROXY_PING_PORT}\", \"http_port\": \"${SERVER_PORT}\"}}' \
+        --kv-transfer-config '${PREFILL_KV_TRANSFER_CONFIG}' \
         ${PREFILL_SERVER_CONFIG}"
 
     if [[ "$DRY_RUN" -eq 1 ]]; then
@@ -544,11 +615,13 @@ else
     done
 
     SERVED_MODEL="${MODEL_NAME}"
+    DECODE_KV_TRANSFER_CONFIG="$(make_moriio_kv_transfer_config kv_consumer)"
+    echo "DECODE_KV_TRANSFER_CONFIG: $DECODE_KV_TRANSFER_CONFIG"
     DECODE_CMD="vllm serve ${MODEL_PATH} \
         --served-model-name ${SERVED_MODEL} \
         --port $SERVER_PORT \
         --trust-remote-code \
-        --kv-transfer-config '{\"kv_connector\": \"MoRIIOConnector\", \"kv_role\": \"kv_consumer\", \"kv_connector_extra_config\": {\"proxy_ip\": \"${NODE0_ADDR}\", \"proxy_ping_port\": \"${PROXY_PING_PORT}\", \"http_port\": \"${SERVER_PORT}\"}}' \
+        --kv-transfer-config '${DECODE_KV_TRANSFER_CONFIG}' \
         ${DECODE_SERVER_CONFIG}"
 
     if [[ "$DRY_RUN" -eq 1 ]]; then
