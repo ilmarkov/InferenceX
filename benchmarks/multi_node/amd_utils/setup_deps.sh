@@ -438,6 +438,81 @@ except Exception as e:
 }
 
 # ---------------------------------------------------------------------------
+# 10b. Patch MoRIIO WRITE-mode release path for latest vLLM.
+#
+# vLLM 0.25 introduced a WRITE-mode prefill-block release path in
+# MoRIIOConnector.request_finished.  For Kimi PD-disagg the decode-side request
+# can finish with do_remote_prefill still set and a plain request_id, so the new
+# release helper cannot parse the router-embedded notify address and the request
+# hangs behind:
+#
+#   Could not find ... in transfer_id_to_request_id lookup table
+#   Cannot release WRITE prefill blocks ... missing remote notify address
+#
+# The older working bf610c2f image did not run this release path.  Restore that
+# behavior behind an env-enabled patch while we validate the latest image.
+# ---------------------------------------------------------------------------
+patch_moriio_write_release_kimi_hang() {
+    python3 -c '
+import os, sys
+
+try:
+    import vllm.distributed.kv_transfer.kv_connector.v1.moriio.moriio_connector as mc
+    f = mc.__file__
+    src = open(f).read()
+
+    if "[PATCHED] skip WRITE release on unfinished remote prefill" in src:
+        print("[SETUP] MoRIIO WRITE release hang patch already applied")
+        sys.exit(0)
+
+    old = """        if params.get("do_remote_prefill"):
+            # If do_remote_prefill is still True when the request is finished,
+            # update_state_after_alloc must not have been called (the request
+            # must have been aborted before it was scheduled).
+            # To avoid stranding the prefill blocks in the prefill instance,
+            # READ mode adds empty block_ids to _reqs_need_recv so the worker
+            # side notifies the prefill instance. WRITE mode should notify the
+            # producer directly: there is no decode allocation for the producer
+            # to write into, and a plain request_id may not contain router-
+            # embedded MoRIIO ZMQ addresses.
+            if self.mode == MoRIIOMode.WRITE:
+                self._release_write_prefill_blocks(request.request_id, params)
+            else:
+                self._reqs_need_recv[request.request_id] = (request, [])
+            params["do_remote_prefill"] = False
+            return False, None"""
+
+    new = """        if params.get("do_remote_prefill"):
+            # [PATCHED] skip WRITE release on unfinished remote prefill.
+            # The old working MoRIIO path did not send a release from here.  On
+            # Kimi, latest vLLM can finish decode-side scheduling with a plain
+            # request_id, so _release_write_prefill_blocks cannot recover the
+            # remote notify address and leaves the router request hanging.
+            if self.mode == MoRIIOMode.WRITE:
+                logger.warning(
+                    "[HANGFIX] skipping WRITE prefill-block release for "
+                    "request %s because do_remote_prefill remained set at "
+                    "request_finished; preserving old MoRIIO behavior",
+                    request.request_id,
+                )
+            else:
+                self._reqs_need_recv[request.request_id] = (request, [])
+            params["do_remote_prefill"] = False
+            return False, None"""
+
+    if old not in src:
+        print("[SETUP] WARN: MoRIIO WRITE release pattern not found, skipping")
+        sys.exit(0)
+
+    open(f, "w").write(src.replace(old, new, 1))
+    print("[SETUP] Patched MoRIIO WRITE release path for Kimi hang")
+except Exception as e:
+    print(f"[SETUP] WARN patch MoRIIO WRITE release hang: {e}", file=sys.stderr)
+'
+    _SETUP_INSTALLED+=("MoRIIO-write-release-kimi-hang-patch")
+}
+
+# ---------------------------------------------------------------------------
 # 11. Fix READ-mode scheduler assertion in _update_from_kv_xfer_finished
 #     vLLM asserts that a request in finished_recving must be either
 #     WAITING_FOR_REMOTE_KVS or finished.  In READ mode the request can
@@ -745,6 +820,7 @@ if [[ "$ENGINE" == "vllm-disagg" ]]; then
     patch_moriio_save_kv_timeout
     patch_moriio_transfer_timeout
     patch_moriio_load_kv_timeout
+    patch_moriio_write_release_kimi_hang
     patch_scheduler_read_mode_fix
     patch_prefill_idle_kv_reaper
 

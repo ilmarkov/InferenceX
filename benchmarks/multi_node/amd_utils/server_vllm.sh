@@ -320,7 +320,31 @@ if [ "$NODE_RANK" -eq 0 ]; then
         fi
         echo "MoRI-IO proxy health endpoint is up"
 
-        ROUTER_READY_PAYLOAD="{\"model\":\"${SERVED_MODEL}\",\"prompt\":\"ping\",\"max_tokens\":1,\"temperature\":0}"
+        ROUTER_READY_PROMPT="${ROUTER_READY_PROMPT:-}"
+        ROUTER_READY_MAX_TOKENS="${ROUTER_READY_MAX_TOKENS:-}"
+        if [[ -z "$ROUTER_READY_PROMPT" ]]; then
+            if [[ "$MODEL_NAME" == "Kimi-K2.5-MXFP4" ]]; then
+                # Kimi's MoRIIO PD path can leave a 1-token readiness request
+                # without decode-side block allocation. Use a short real prompt
+                # that exercises the same transfer path as throughput runs.
+                ROUTER_READY_PROMPT="$(printf 'ping %.0s' {1..256})"
+                ROUTER_READY_MAX_TOKENS="${ROUTER_READY_MAX_TOKENS:-4}"
+            else
+                ROUTER_READY_PROMPT="ping"
+                ROUTER_READY_MAX_TOKENS="${ROUTER_READY_MAX_TOKENS:-1}"
+            fi
+        fi
+        ROUTER_READY_MAX_TOKENS="${ROUTER_READY_MAX_TOKENS:-1}"
+        ROUTER_READY_PAYLOAD="$(python3 - <<PY
+import json
+print(json.dumps({
+    "model": "${SERVED_MODEL}",
+    "prompt": ${ROUTER_READY_PROMPT@Q},
+    "max_tokens": int("${ROUTER_READY_MAX_TOKENS}"),
+    "temperature": 0,
+}))
+PY
+)"
         ROUTER_READY=false
         for _attempt in $(seq 1 30); do
             rm -f /tmp/vllm_router_ready.json
