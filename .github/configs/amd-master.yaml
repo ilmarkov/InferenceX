@@ -1327,17 +1327,16 @@ kimik2.5-fp4-mi355x-vllm-disagg:
     - isl: 1024
       osl: 1024
       search-space:
-      # Debug-only: run DP-attn + EP only against the latest vLLM nightly.
-      # DP-attn 1P1D (high-conc: DP+EP beats TP8 at >=512 per ROCm guidance).
-      # dp-attn:true makes server_vllm.sh rewrite TP8 -> DP8+TP1 and drop fp8 KV
-      # (the fp8 DP-attn qh64 MLA kernel faults at capture on MI355X).
+      # Debug-only: validate the patched normal MoRIIO disagg path first.
+      # This matches the local GPU3E76/GPU74C0 smoke: TP8+EP8 on both
+      # prefill/decode, without DP-attn rewrite to DP8+TP1.
       - spec-decoding: "none"
-        conc-list: [ 256, 512, 1024 ]
+        conc-list: [ 256 ]
         prefill:
           num-worker: 1
           tp: 8
           ep: 8
-          dp-attn: true
+          dp-attn: false
           additional-settings:
           - "PREFILL_NODES=1"
           - "VLLM_MORIIO_CONNECTOR_READ_MODE=1"
@@ -1345,7 +1344,7 @@ kimik2.5-fp4-mi355x-vllm-disagg:
           num-worker: 1
           tp: 8
           ep: 8
-          dp-attn: true
+          dp-attn: false
           additional-settings:
           - "DECODE_NODES=1"
 
