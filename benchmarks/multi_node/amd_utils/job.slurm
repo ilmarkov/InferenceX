@@ -400,6 +400,7 @@ if [[ "$ENGINE" == "vllm-disagg" ]]; then
         -e UCX_ROCM_IPC_MIN_ZCOPY=0
         -e UCX_LOG_LEVEL=warn
         -e HSA_ENABLE_SDMA=1
+        -e MORI_GPU_ARCHS=\${MORI_GPU_ARCHS:-gfx950}
         -e PROXY_STREAM_IDLE_TIMEOUT=\${PROXY_STREAM_IDLE_TIMEOUT:-300}
         -e VLLM_MORIIO_CONNECTOR_READ_MODE=\${VLLM_MORIIO_CONNECTOR_READ_MODE:-1}
         -e PYTHONPYCACHEPREFIX=/tmp/pycache
