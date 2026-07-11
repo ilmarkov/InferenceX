@@ -513,6 +513,66 @@ except Exception as e:
 }
 
 # ---------------------------------------------------------------------------
+# 10c. Patch MoRIIO remote DP size metadata for latest vLLM.
+#
+# In vLLM DP-attn disagg, the router currently forwards prefill
+# kv_transfer_params with remote_dp_size=1 even when the decode worker is DP8.
+# The prefill side then handshakes/registers only dp0 metadata, but the MoRIIO
+# writer later routes some blocks to remote engines such as host:6301_dp1 and
+# fails with:
+#
+#   KeyError: '<decode-host>:6301_dp1'
+#
+# For the MI355X debug path prefill/decode are symmetric DP8 workers, so use the
+# local data_parallel_size as the remote DP size when the metadata is missing.
+# ---------------------------------------------------------------------------
+patch_moriio_remote_dp_size() {
+    python3 -c '
+import os, sys
+
+try:
+    import vllm.distributed.kv_transfer.kv_connector.v1.moriio.moriio_connector as mc
+    f = mc.__file__
+    src = open(f).read()
+
+    if "[PATCHED] infer missing remote_dp_size" in src:
+        print("[SETUP] MoRIIO remote DP size patch already applied")
+        sys.exit(0)
+
+    old = """            remote_dp_size = int(meta.remote_dp_size)
+            cur_dp_rank = self.data_parallel_rank
+            remote_block_ids: list[list[int]] = [[] for _ in range(remote_dp_size)]"""
+
+    new = """            remote_dp_size = int(meta.remote_dp_size)
+            # [PATCHED] infer missing remote_dp_size for symmetric DP-attn disagg.
+            # Router metadata can report remote_dp_size=1 even when the peer has
+            # multiple DP ranks.  Without this, only dp0 is registered and writes
+            # to host:port_dp1+ fail with KeyError.
+            _local_dp_size = getattr(self, "data_parallel_size", 1)
+            if remote_dp_size == 1 and _local_dp_size > 1:
+                logger.warning(
+                    "[HANGFIX] overriding remote_dp_size=1 with local "
+                    "data_parallel_size=%s for request %s",
+                    _local_dp_size, req_id,
+                )
+                remote_dp_size = _local_dp_size
+                meta.remote_dp_size = remote_dp_size
+            cur_dp_rank = self.data_parallel_rank
+            remote_block_ids: list[list[int]] = [[] for _ in range(remote_dp_size)]"""
+
+    if old not in src:
+        print("[SETUP] WARN: MoRIIO remote_dp_size pattern not found, skipping")
+        sys.exit(0)
+
+    open(f, "w").write(src.replace(old, new, 1))
+    print("[SETUP] Patched MoRIIO remote DP size inference")
+except Exception as e:
+    print(f"[SETUP] WARN patch MoRIIO remote DP size: {e}", file=sys.stderr)
+'
+    _SETUP_INSTALLED+=("MoRIIO-remote-dp-size-patch")
+}
+
+# ---------------------------------------------------------------------------
 # 11. Fix READ-mode scheduler assertion in _update_from_kv_xfer_finished
 #     vLLM asserts that a request in finished_recving must be either
 #     WAITING_FOR_REMOTE_KVS or finished.  In READ mode the request can
@@ -821,6 +881,7 @@ if [[ "$ENGINE" == "vllm-disagg" ]]; then
     patch_moriio_transfer_timeout
     patch_moriio_load_kv_timeout
     patch_moriio_write_release_kimi_hang
+    patch_moriio_remote_dp_size
     patch_scheduler_read_mode_fix
     patch_prefill_idle_kv_reaper
 
