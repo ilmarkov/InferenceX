@@ -465,40 +465,13 @@ try:
         print("[SETUP] MoRIIO WRITE release hang patch already applied")
         sys.exit(0)
 
-    old = """        if params.get("do_remote_prefill"):
-            # If do_remote_prefill is still True when the request is finished,
-            # update_state_after_alloc must not have been called (the request
-            # must have been aborted before it was scheduled).
-            # To avoid stranding the prefill blocks in the prefill instance,
-            # READ mode adds empty block_ids to _reqs_need_recv so the worker
-            # side notifies the prefill instance. WRITE mode should notify the
-            # producer directly: there is no decode allocation for the producer
-            # to write into, and a plain request_id may not contain router-
-            # embedded MoRIIO ZMQ addresses.
-            if self.mode == MoRIIOMode.WRITE:
-                self._release_write_prefill_blocks(request.request_id, params)
-            else:
-                self._reqs_need_recv[request.request_id] = (request, [])
-            params["do_remote_prefill"] = False
-            return False, None"""
-
-    new = """        if params.get("do_remote_prefill"):
-            # [PATCHED] skip WRITE release on unfinished remote prefill.
-            # The old working MoRIIO path did not send a release from here.  On
-            # Kimi, latest vLLM can finish decode-side scheduling with a plain
-            # request_id, so _release_write_prefill_blocks cannot recover the
-            # remote notify address and leaves the router request hanging.
-            if self.mode == MoRIIOMode.WRITE:
-                logger.warning(
+    old = """                self._release_write_prefill_blocks(request.request_id, params)"""
+    new = """                logger.warning(
                     "[HANGFIX] skipping WRITE prefill-block release for "
                     "request %s because do_remote_prefill remained set at "
                     "request_finished; preserving old MoRIIO behavior",
                     request.request_id,
-                )
-            else:
-                self._reqs_need_recv[request.request_id] = (request, [])
-            params["do_remote_prefill"] = False
-            return False, None"""
+                )"""
 
     if old not in src:
         print("[SETUP] WARN: MoRIIO WRITE release pattern not found, skipping")
@@ -539,9 +512,7 @@ try:
         print("[SETUP] MoRIIO remote DP size patch already applied")
         sys.exit(0)
 
-    old = """            remote_dp_size = int(meta.remote_dp_size)
-            cur_dp_rank = self.data_parallel_rank
-            remote_block_ids: list[list[int]] = [[] for _ in range(remote_dp_size)]"""
+    old = """            remote_dp_size = int(meta.remote_dp_size)"""
 
     new = """            remote_dp_size = int(meta.remote_dp_size)
             # [PATCHED] infer missing remote_dp_size for symmetric DP-attn disagg.
@@ -556,9 +527,7 @@ try:
                     _local_dp_size, req_id,
                 )
                 remote_dp_size = _local_dp_size
-                meta.remote_dp_size = remote_dp_size
-            cur_dp_rank = self.data_parallel_rank
-            remote_block_ids: list[list[int]] = [[] for _ in range(remote_dp_size)]"""
+                meta.remote_dp_size = remote_dp_size"""
 
     if old not in src:
         print("[SETUP] WARN: MoRIIO remote_dp_size pattern not found, skipping")
