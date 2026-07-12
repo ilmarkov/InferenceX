@@ -542,6 +542,256 @@ except Exception as e:
 }
 
 # ---------------------------------------------------------------------------
+# 10d. Patch MoRIIO heterogeneous-TP readiness.
+#
+# Kimi MPND needs prefill TP4 feeding decode TP8/TP16.  vLLM MoRIIO has
+# heterogeneous TP helpers, but the READ-mode scheduler path currently assumes
+# one remote-engine readiness flag is enough for all local TP ranks and then
+# continues down the normal request path after a handshake timeout.  In
+# prefill-TP4 -> decode-TP8 tests this produces:
+#
+#   Timed out waiting for load_ready_flag[host:6301]
+#   ValueError: Cannot parse peer zmq_address from request_id: '<plain id>'
+#
+# Decode ranks that do not finish the heterogeneous handshake in the first
+# synchronous wait then see a plain internal/rejection request ID and crash the
+# EngineCore while trying to parse router-embedded ZMQ addresses.
+#
+# Fixes:
+#   1. Scope load/write readiness to the local TP rank, so heterogeneous TP
+#      ranks do not race on a single remote_engine_id flag.
+#   2. On handshake timeout, return and let the scheduler retry instead of
+#      falling through into a request path with incomplete remote metadata.
+#   3. Treat plain request IDs without remote host/ports as non-PD cleanup
+#      requests and skip MoRIIO metadata construction instead of crashing.
+# ---------------------------------------------------------------------------
+patch_moriio_heterogeneous_tp_readiness() {
+    python3 -c '
+import os, sys
+
+try:
+    import vllm.distributed.kv_transfer.kv_connector.v1.moriio.moriio_common as common
+    f = common.__file__
+    src = open(f).read()
+
+    if "[PATCHED] tolerate plain request_id for heterogeneous TP" in src:
+        print("[SETUP] MoRIIO heterogeneous-TP common patch already applied")
+    else:
+        old = """            # Parse host/ports from the request_id. The router embeds both
+            # zmq_addresses in PD request IDs, but WRITE decode requests may carry
+            # a plain request ID and get the remote address via kv_transfer_params.
+            peer_zmq = get_peer_zmq_from_request_id(request_id, is_producer=write_mode)
+            remote_host, remote_handshake_port, remote_notify_port = (
+                parse_moriio_zmq_address(peer_zmq)
+            )"""
+        new = """            # Parse host/ports from the request_id. The router embeds both
+            # zmq_addresses in PD request IDs, but WRITE decode requests may carry
+            # a plain request ID and get the remote address via kv_transfer_params.
+            # [PATCHED] tolerate plain request_id for heterogeneous TP cleanup.
+            try:
+                peer_zmq = get_peer_zmq_from_request_id(
+                    request_id, is_producer=write_mode)
+                remote_host, remote_handshake_port, remote_notify_port = (
+                    parse_moriio_zmq_address(peer_zmq)
+                )
+            except ValueError:
+                logger.warning(
+                    "[HANGFIX] skipping MoRIIO metadata for non-PD/plain "
+                    "request_id=%s write_mode=%s kv_transfer_keys=%s",
+                    request_id, write_mode, sorted(kv_transfer_params.keys()),
+                )
+                return"""
+        if old not in src:
+            print("[SETUP] WARN: MoRIIO plain request_id pattern not found")
+        else:
+            open(f, "w").write(src.replace(old, new, 1))
+            print("[SETUP] Patched MoRIIO plain request_id handling")
+except Exception as e:
+    print(f"[SETUP] WARN patch MoRIIO plain request_id: {e}", file=sys.stderr)
+
+try:
+    import vllm.distributed.kv_transfer.kv_connector.v1.moriio.moriio_connector as mc
+    f = mc.__file__
+    src = open(f).read()
+
+    if "[PATCHED] heterogeneous TP local ready key" in src:
+        print("[SETUP] MoRIIO heterogeneous-TP connector patch already applied")
+        sys.exit(0)
+
+    old_ready_head = """        # Do MoRIIO handshake in background and add to _ready_requests when done.
+        fut = None
+        if remote_engine_id is not None:
+            fut = self._handshake_futures.get(remote_engine_id)"""
+    new_ready_head = """        # Do MoRIIO handshake in background and add to _ready_requests when done.
+        # [PATCHED] heterogeneous TP local ready key.  Multiple local TP ranks
+        # can map to one remote TP rank; readiness must remain local-rank scoped.
+        ready_key = f"{remote_engine_id}|local_tp{self.tp_rank}"
+        future_key = f"{self.get_engine_name_with_dp(remote_engine_id, 0)}|local_tp{self.tp_rank}"
+        fut = None
+        if remote_engine_id is not None:
+            fut = self._handshake_futures.get(future_key)"""
+    if old_ready_head in src:
+        src = src.replace(old_ready_head, new_ready_head, 1)
+    else:
+        print("[SETUP] WARN: MoRIIO handshake ready-key head pattern not found")
+
+    old_request_ready = """        def request_ready(_f: Future[Any], entry=(req_id, meta)):
+            logger.info("MoRIIO handshake done for request %s", req_id)
+            self._ready_requests.put(entry)
+            self.load_ready_flag[remote_engine_id] = True
+            self.write_ready_flags[remote_engine_id] = True"""
+    new_request_ready = """        def request_ready(_f: Future[Any], entry=(req_id, meta), key=ready_key):
+            logger.info(
+                "MoRIIO handshake done for request %s local_tp=%s ready_key=%s",
+                req_id, self.tp_rank, key)
+            self._ready_requests.put(entry)
+            self.load_ready_flag[key] = True
+            self.write_ready_flags[key] = True"""
+    if old_request_ready in src:
+        src = src.replace(old_request_ready, new_request_ready, 1)
+    else:
+        print("[SETUP] WARN: MoRIIO request_ready local key pattern not found")
+
+    old_future = """            future.add_done_callback(done_callback)
+            self._handshake_futures[dp_engine_id] = future"""
+    new_future = """            future.add_done_callback(done_callback)
+            self._handshake_futures[f"{dp_engine_id}|local_tp{self.tp_rank}"] = future"""
+    if old_future in src:
+        src = src.replace(old_future, new_future, 1)
+    else:
+        print("[SETUP] WARN: MoRIIO handshake future key pattern not found")
+
+    old_start = """        for req_id, meta in metadata.reqs_to_recv.items():
+            remote_engine_id = (
+                str(meta.remote_host) + ":" + str(meta.remote_handshake_port)
+            )
+            meta.remote_engine_id = remote_engine_id
+            dp0_remote_engine_id = self.get_engine_name_with_dp(remote_engine_id, 0)
+            if dp0_remote_engine_id not in self._remote_agents:
+                # Initiate handshake with remote engine to exchange metadata.
+                with self._handshake_lock:
+                    if remote_engine_id not in self._remote_agents:
+                        self._background_moriio_handshake(
+                            req_id, remote_engine_id, meta
+                        )
+                        wait_handshake_readd_req = True
+
+                        continue
+
+            # Handshake already completed, start async read xfer.
+            self._read_blocks_for_req(req_id, meta)
+        # Start transfers for requests whose handshakes have now finished.
+
+        if remote_engine_id is None and not wait_handshake_readd_req:
+            return
+        _deadline = time.monotonic() + self.moriio_config.transfer_timeout
+        while True:
+            if (
+                self._ready_requests.empty()
+                and remote_engine_id not in self.load_ready_flag
+                and wait_handshake_readd_req
+            ):
+                if time.monotonic() > _deadline:
+                    logger.warning(
+                        "Timed out waiting for load_ready_flag[%s]; "
+                        "adjust with kv_connector_extra_config.transfer_timeout",
+                        remote_engine_id,
+                    )
+                    break
+                time.sleep(0.001)
+                continue
+            elif (
+                not self._ready_requests.empty()
+                and remote_engine_id in self.load_ready_flag
+            ):
+                self._read_blocks_for_req(*self._ready_requests.get_nowait())
+                break
+            else:
+                break
+
+        self._reqs_to_send.update(metadata.reqs_to_send)"""
+
+    new_start = """        ready_key = None
+        for req_id, meta in metadata.reqs_to_recv.items():
+            remote_engine_id = (
+                str(meta.remote_host) + ":" + str(meta.remote_handshake_port)
+            )
+            meta.remote_engine_id = remote_engine_id
+            ready_key = f"{remote_engine_id}|local_tp{self.tp_rank}"
+            dp0_remote_engine_id = self.get_engine_name_with_dp(remote_engine_id, 0)
+            local_dp0_key = f"{dp0_remote_engine_id}|local_tp{self.tp_rank}"
+            if local_dp0_key not in self._remote_agents:
+                # Initiate handshake with remote engine to exchange metadata.
+                with self._handshake_lock:
+                    if local_dp0_key not in self._remote_agents:
+                        self._background_moriio_handshake(
+                            req_id, remote_engine_id, meta
+                        )
+                        wait_handshake_readd_req = True
+
+                        continue
+
+            # Handshake already completed, start async read xfer.
+            self._read_blocks_for_req(req_id, meta)
+        # Start transfers for requests whose handshakes have now finished.
+
+        if remote_engine_id is None and not wait_handshake_readd_req:
+            return
+        _deadline = time.monotonic() + self.moriio_config.transfer_timeout
+        while True:
+            if (
+                self._ready_requests.empty()
+                and ready_key not in self.load_ready_flag
+                and wait_handshake_readd_req
+            ):
+                if time.monotonic() > _deadline:
+                    logger.warning(
+                        "[HANGFIX] timed out waiting for heterogeneous-TP "
+                        "load_ready_flag[%s] remote_engine_id=%s; deferring "
+                        "request so the scheduler can retry",
+                        ready_key, remote_engine_id,
+                    )
+                    return
+                time.sleep(0.001)
+                continue
+            elif (
+                not self._ready_requests.empty()
+                and ready_key in self.load_ready_flag
+            ):
+                while not self._ready_requests.empty():
+                    self._read_blocks_for_req(*self._ready_requests.get_nowait())
+                break
+            else:
+                break
+
+        self._reqs_to_send.update(metadata.reqs_to_send)"""
+
+    if old_start not in src:
+        print("[SETUP] WARN: MoRIIO start_load_kv heterogeneous TP pattern not found")
+    else:
+        src = src.replace(old_start, new_start, 1)
+
+    # Store remote agents with both the original key and a local-TP scoped key so
+    # existing code paths keep working while heterogeneous TP readiness can test
+    # the local key.
+    old_agents = """                        self._remote_agents[eid] = f.result()"""
+    new_agents = """                        _agents = f.result()
+                        self._remote_agents[eid] = _agents
+                        self._remote_agents[f"{eid}|local_tp{self.tp_rank}"] = _agents"""
+    if old_agents in src:
+        src = src.replace(old_agents, new_agents, 1)
+    else:
+        print("[SETUP] WARN: MoRIIO remote_agents local key pattern not found")
+
+    open(f, "w").write(src)
+    print("[SETUP] Patched MoRIIO heterogeneous TP readiness")
+except Exception as e:
+    print(f"[SETUP] WARN patch MoRIIO heterogeneous TP readiness: {e}", file=sys.stderr)
+'
+    _SETUP_INSTALLED+=("MoRIIO-heterogeneous-tp-readiness-patch")
+}
+
+# ---------------------------------------------------------------------------
 # 11. Fix READ-mode scheduler assertion in _update_from_kv_xfer_finished
 #     vLLM asserts that a request in finished_recving must be either
 #     WAITING_FOR_REMOTE_KVS or finished.  In READ mode the request can
@@ -851,6 +1101,7 @@ if [[ "$ENGINE" == "vllm-disagg" ]]; then
     patch_moriio_load_kv_timeout
     patch_moriio_write_release_kimi_hang
     patch_moriio_remote_dp_size
+    patch_moriio_heterogeneous_tp_readiness
     patch_scheduler_read_mode_fix
     patch_prefill_idle_kv_reaper
 
