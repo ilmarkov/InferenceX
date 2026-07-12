@@ -1,0 +1,132 @@
+kimik2.5-fp4-mi355x-vllm-disagg-mpnd:
+  image: vllm/vllm-openai-rocm:nightly
+  model: amd/Kimi-K2.5-MXFP4
+  model-prefix: kimik2.5
+  runner: mi355x-disagg
+  precision: fp4
+  framework: vllm-disagg
+  multinode: true
+  disagg: true
+  scenarios:
+    fixed-seq-len:
+    - isl: 1024
+      osl: 1024
+      search-space:
+      # Decode-heavy 1k1k. Mirror the NV MPND idea with smaller prefill
+      # workers: 4-GPU prefill, 8-GPU decode.
+      - spec-decoding: "none"
+        conc-list: [ 512, 1024 ]
+        prefill:
+          num-worker: 1
+          tp: 4
+          ep: 4
+          dp-attn: false
+          additional-settings:
+          - "PREFILL_NODES=1"
+          - "VLLM_MORIIO_CONNECTOR_READ_MODE=1"
+        decode:
+          num-worker: 1
+          tp: 8
+          ep: 8
+          dp-attn: false
+          additional-settings:
+          - "DECODE_NODES=1"
+          - "VLLM_MORIIO_CONNECTOR_READ_MODE=1"
+      # More decode capacity for high 1k1k concurrency.
+      - spec-decoding: "none"
+        conc-list: [ 1024, 2048 ]
+        prefill:
+          num-worker: 1
+          tp: 4
+          ep: 4
+          dp-attn: false
+          additional-settings:
+          - "PREFILL_NODES=1"
+          - "VLLM_MORIIO_CONNECTOR_READ_MODE=1"
+        decode:
+          num-worker: 2
+          tp: 8
+          ep: 8
+          dp-attn: false
+          additional-settings:
+          - "DECODE_NODES=2"
+          - "VLLM_MORIIO_CONNECTOR_READ_MODE=1"
+      # DP-attn comparison only where it has a chance to amortize overhead.
+      - spec-decoding: "none"
+        conc-list: [ 1024 ]
+        prefill:
+          num-worker: 1
+          tp: 8
+          ep: 8
+          dp-attn: true
+          additional-settings:
+          - "PREFILL_NODES=1"
+          - "VLLM_MORIIO_CONNECTOR_READ_MODE=1"
+        decode:
+          num-worker: 1
+          tp: 8
+          ep: 8
+          dp-attn: true
+          additional-settings:
+          - "DECODE_NODES=1"
+          - "VLLM_MORIIO_CONNECTOR_READ_MODE=1"
+
+    - isl: 8192
+      osl: 1024
+      search-space:
+      # Prefill-heavy 8k1k. Sweep more prefill workers, keeping decode fixed.
+      - spec-decoding: "none"
+        conc-list: [ 512, 1024 ]
+        prefill:
+          num-worker: 2
+          tp: 4
+          ep: 4
+          dp-attn: false
+          additional-settings:
+          - "PREFILL_NODES=2"
+          - "VLLM_MORIIO_CONNECTOR_READ_MODE=1"
+        decode:
+          num-worker: 1
+          tp: 8
+          ep: 8
+          dp-attn: false
+          additional-settings:
+          - "DECODE_NODES=1"
+          - "VLLM_MORIIO_CONNECTOR_READ_MODE=1"
+      - spec-decoding: "none"
+        conc-list: [ 1024 ]
+        prefill:
+          num-worker: 4
+          tp: 4
+          ep: 4
+          dp-attn: false
+          additional-settings:
+          - "PREFILL_NODES=4"
+          - "VLLM_MORIIO_CONNECTOR_READ_MODE=1"
+        decode:
+          num-worker: 1
+          tp: 8
+          ep: 8
+          dp-attn: false
+          additional-settings:
+          - "DECODE_NODES=1"
+          - "VLLM_MORIIO_CONNECTOR_READ_MODE=1"
+      # DP-attn high-concurrency comparison for 8k1k.
+      - spec-decoding: "none"
+        conc-list: [ 1024 ]
+        prefill:
+          num-worker: 2
+          tp: 8
+          ep: 8
+          dp-attn: true
+          additional-settings:
+          - "PREFILL_NODES=2"
+          - "VLLM_MORIIO_CONNECTOR_READ_MODE=1"
+        decode:
+          num-worker: 1
+          tp: 8
+          ep: 8
+          dp-attn: true
+          additional-settings:
+          - "DECODE_NODES=1"
+          - "VLLM_MORIIO_CONNECTOR_READ_MODE=1"
