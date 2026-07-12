@@ -577,13 +577,14 @@ try:
     if "[PATCHED] tolerate plain request_id for heterogeneous TP" in src:
         print("[SETUP] MoRIIO heterogeneous-TP common patch already applied")
     else:
-        old = """            # Parse host/ports from the request_id. The router embeds both
-            # zmq_addresses in PD request IDs, but WRITE decode requests may carry
-            # a plain request ID and get the remote address via kv_transfer_params.
-            peer_zmq = get_peer_zmq_from_request_id(request_id, is_producer=write_mode)
-            remote_host, remote_handshake_port, remote_notify_port = (
-                parse_moriio_zmq_address(peer_zmq)
-            )"""
+        import re
+        old = re.compile(
+            r"(?m)^ {12}peer_zmq = get_peer_zmq_from_request_id"
+            r"\(request_id, is_producer=write_mode\)\n"
+            r"^ {12}remote_host, remote_handshake_port, remote_notify_port = \(\n"
+            r"^ {16}parse_moriio_zmq_address\(peer_zmq\)\n"
+            r"^ {12}\)"
+        )
         new = """            # Parse host/ports from the request_id. The router embeds both
             # zmq_addresses in PD request IDs, but WRITE decode requests may carry
             # a plain request ID and get the remote address via kv_transfer_params.
@@ -601,10 +602,11 @@ try:
                     request_id, write_mode, sorted(kv_transfer_params.keys()),
                 )
                 return"""
-        if old not in src:
+        new_src, count = old.subn(new, src, count=1)
+        if count == 0:
             print("[SETUP] WARN: MoRIIO plain request_id pattern not found")
         else:
-            open(f, "w").write(src.replace(old, new, 1))
+            open(f, "w").write(new_src)
             print("[SETUP] Patched MoRIIO plain request_id handling")
 except Exception as e:
     print(f"[SETUP] WARN patch MoRIIO plain request_id: {e}", file=sys.stderr)
