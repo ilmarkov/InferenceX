@@ -1,5 +1,5 @@
 kimik2.5-fp4-mi355x-vllm-disagg-mpnd:
-  image: vllm/vllm-openai-rocm:nightly
+  image: vllm/vllm-openai-rocm:nightly-09663abde0f50944a8d5ea30120666024b503faa
   model: amd/Kimi-K2.5-MXFP4
   model-prefix: kimik2.5
   runner: mi355x-disagg
