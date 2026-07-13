@@ -451,6 +451,19 @@ echo \"Rank \$SLURM_PROCID on \$(hostname)\"
 eval \"\$DOCKER_CMD_DETECT\"
 echo \"[docker-detect] rank \$SLURM_PROCID: DOCKER_CMD=\$DOCKER_CMD\"
 
+# Role-local GPU visibility. The allocation can still be whole-node, but MPND
+# prefill workers such as TP4 should only see four GPUs inside the container.
+_ROLE_TP_SIZE=\"\$DECODE_TP_SIZE\"
+if (( SLURM_PROCID < xP )); then
+    _ROLE_TP_SIZE=\"\$PREFILL_TP_SIZE\"
+fi
+if (( _ROLE_TP_SIZE < 1 || _ROLE_TP_SIZE > GPUS_PER_NODE )); then
+    echo \"ERROR: role TP size \$_ROLE_TP_SIZE must be in [1, \$GPUS_PER_NODE] on \$(hostname)\" >&2
+    exit 1
+fi
+_ROLE_VISIBLE_DEVICES=\"\$(seq -s, 0 \$(( _ROLE_TP_SIZE - 1 )))\"
+echo \"[gpu-visible] rank=\$SLURM_PROCID role_tp_size=\$_ROLE_TP_SIZE visible_devices=\$_ROLE_VISIBLE_DEVICES\"
+
 # Enable out-of-tree RDMA library mounts for atom-disagg (mooncake requires host RDMA stack)
 RDMA_MOUNTS=()
 if [[ "$ENGINE" == "atom-disagg" ]]; then
@@ -598,6 +611,9 @@ fi
     \${RDMA_MOUNTS[@]+"\${RDMA_MOUNTS[@]}"} \
     ${DOCKER_ENV_COMMON[*]} \
     ${DOCKER_ENV_ENGINE[*]} \
+    -e HIP_VISIBLE_DEVICES=\"\$_ROLE_VISIBLE_DEVICES\" \
+    -e ROCR_VISIBLE_DEVICES=\"\$_ROLE_VISIBLE_DEVICES\" \
+    -e CUDA_VISIBLE_DEVICES=\"\$_ROLE_VISIBLE_DEVICES\" \
     --name \"$DOCKER_CONT_NAME\" \
     --entrypoint \"\" \
     \"$DOCKER_IMAGE_NAME\" bash -lc '
