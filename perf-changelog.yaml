@@ -4694,8 +4694,9 @@
 - config-keys:
     - kimik2.7-fp4-mi355x-vllm-agentic
   description:
-    - "Move the agentic-coding sweep from TP4 to TP8 at conc [16,32,48] for both KV-offloading none and dram/LMCache (900s trace-replay smoke)"
+    - "Move the agentic-coding sweep from TP4 to TP8 at conc [16,32,48] across three KV tiers -- none, dram/LMCache, and dram/Mooncake -- for a head-to-head offload comparison (900s trace-replay smoke)"
     - "TP4 was GPU-KV-capacity bound: the ~121 GiB pool held only ~12 resident ~90k-token contexts, so throughput plateaued (~160 tok/s) and requests preempted/thrashed from conc16 up. TP8 doubles the KV pool and per-token decode compute to break the wall"
+    - "Add a Mooncake KV-offload backend to the recipe (embedded MooncakeStoreConnector store, built from source for ROCm, tcp protocol), mirroring the MI355X DSv4 vLLM recipe"
     - "Adds optional per-scenario 'duration' override to the agentic-coding config schema (defaults to 3600s when unset)"
   pr-link: https://github.com/SemiAnalysisAI/InferenceX/pull/2126
 
