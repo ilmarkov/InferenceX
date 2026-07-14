@@ -4692,6 +4692,14 @@
   pr-link: https://github.com/SemiAnalysisAI/InferenceX/pull/2126
 
 - config-keys:
+    - kimik2.7-fp4-mi355x-vllm-agentic
+  description:
+    - "Move the agentic-coding sweep from TP4 to TP8 at conc [16,32,48] for both KV-offloading none and dram/LMCache (900s trace-replay smoke)"
+    - "TP4 was GPU-KV-capacity bound: the ~121 GiB pool held only ~12 resident ~90k-token contexts, so throughput plateaued (~160 tok/s) and requests preempted/thrashed from conc16 up. TP8 doubles the KV pool and per-token decode compute to break the wall"
+    - "Adds optional per-scenario 'duration' override to the agentic-coding config schema (defaults to 3600s when unset)"
+  pr-link: https://github.com/SemiAnalysisAI/InferenceX/pull/2126
+
+- config-keys:
     - dsv4-fp4-mi355x-sglang-mtp
   description:
     - "Bump image to lmsysorg/sglang-rocm:v0.5.14-rocm720-mi35x-20260708"
